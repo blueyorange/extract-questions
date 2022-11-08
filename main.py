@@ -4,10 +4,13 @@ import cv2 as cv
 import numpy as np
 import pytesseract
 import pdf2image
+import re
 
 TEXT_BOX_MIN_ASPECT_RATIO = 3
-START_PAGE = 2
-END_PAGE = 2
+START_PAGE = 4
+END_PAGE = 4
+DILATION_KERNEL = (3,4)
+CHARACTER_AREA = DILATION_KERNEL[0]*DILATION_KERNEL[1]
 
 def rejectChildBoxes(boxes):
     """Takes a list of box tuples in form x,y,w,h and rejects those inside another"""
@@ -27,7 +30,7 @@ def getROIsFromImage(mat):
     mat = cv.threshold(mat, 127, 255, cv.THRESH_BINARY)[1]
     mat = cv.Canny(mat, 200, 255)
     mat = cv.dilate(mat, np.ones(
-            (1,1), np.uint8), iterations=5)
+            DILATION_KERNEL, np.uint8), iterations=5)
     contours = cv.findContours(mat, cv.RETR_EXTERNAL, cv.CHAIN_APPROX_SIMPLE)
     contours = contours[0] if len(contours) == 2 else contours[1]
     boxes = [cv.boundingRect(c) for c in contours]
@@ -41,12 +44,17 @@ def drawBoxes(img, boxes):
         cv.rectangle(img, (x,y),(x+w, y+h), 2)
     return img
 
-def imageToString(img):
-    return pytesseract.image_to_string(img, config='--psm 6')
+def imageToString(img, psm=6):
+    return pytesseract.image_to_string(img, config=f'--psm {psm}')
 
 def sortBoxesTopToBottom(boxes):
     boxes = boxes.copy()
     boxes.sort(key=lambda b: b[1])
+    return boxes
+
+def sortBoxesLeftToRight(boxes):
+    boxes = boxes.copy()
+    boxes.sort(key=lambda b: b[0])
     return boxes
 
 def isTextBoxByAspectRatio(img):
@@ -73,25 +81,37 @@ def cropROI(mat):
         return mat [y:y+h,x:x+w]
     return fn
 
-if __name__ == "__main__":
-    pages = pdf2image.convert_from_path('testpdf.pdf')
-    pages = pages[START_PAGE-1:END_PAGE+1]
-    page = pages[-1]
+def getQuestionNumberBoxes(mat, boxes):
+    sorted = sortBoxesLeftToRight(boxes)
+    questionNumberBoxes = []
+    for box in sorted:
+        cropper = cropROI(mat)
+        crop = cropper(box)
+        text = imageToString(crop, psm=10).strip()
+        if re.match('^\d+$', text):
+            questionNumberBoxes.append(box)
+        else: 
+            return questionNumberBoxes
+
+def processPage(page):
     mat = np.asarray(page)
     boxes = getROIsFromImage(mat)
-    boxes = sortBoxesTopToBottom(boxes)
-    print(boxes)
-    # def leftBoxes(box):
-    #     x,y,w,h = box
-    #     return x<100
-    # boxes = filter(leftBoxes, boxes)
+    questionNumberBoxes = getQuestionNumberBoxes(mat, boxes)
+    crop = cropROI(mat)
     pageWithROIBoxes = drawBoxes(mat, boxes)
-    ROIs = map(cropROI(mat), boxes)
+    crops = map(cropROI(mat), boxes)
+    boxes = sortBoxesTopToBottom(boxes)
     outputStr=""
     cv.imshow('new', pageWithROIBoxes)
-    for roi in ROIs:
-        outputStr = outputStr + imageToString(roi)
+    for crop in crops:
+        outputStr = outputStr + imageToString(crop)
         print(outputStr)
     cv.waitKey(0)
     cv.destroyAllWindows()
     exit()
+    
+if __name__ == "__main__":
+    pages = pdf2image.convert_from_path('testpdf.pdf')
+    pages = pages[START_PAGE-1:END_PAGE+1]
+    page = pages[-1]
+    processPage(page)
